@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Offline POS System with Barcode</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- JsBarcode Library for Barcode Generation -->
+    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+    <style>
+        /* Thermal Printer / Label & Receipt Print Styles */
+        @media print {
+            body * {
+                visibility: hidden !important;
+            }
+            #barcode-print-modal, #barcode-print-modal *, #barcode-section, #barcode-section *,
+            #receipt-print-area, #receipt-print-area * {
+                visibility: visible !important;
+            }
+            #receipt-print-area {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+                margin: 0;
+                padding: 10px;
+                background: white;
+            }
+            #barcode-section {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+                border: none;
+                padding: 0;
+                margin: 0;
+            }
+            .no-print {
+                display: none !important;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans antialiased">
+
+    <!-- Main Container -->
+    <div id="app" class="flex h-screen overflow-hidden">
+
+        <!-- Sidebar Navigation -->
+        <aside class="w-64 bg-slate-900 text-slate-300 flex flex-col justify-between hidden md:flex">
+            <div>
+                <div class="p-5 text-xl font-bold text-white flex items-center gap-2 border-b border-slate-800">
+                    <i class="fa-solid fa-cash-register text-emerald-400"></i> SmartPOS
+                </div>
+                <nav class="p-4 space-y-2">
+                    <button onclick="switchTab('sales')" id="nav-sales" class="w-full flex items-center gap-3 px-4 py-3 rounded-lg bg-emerald-600 text-white font-medium transition">
+                        <i class="fa-solid fa-cart-shopping"></i> Sales / Billing
+                    </button>
+                    <button onclick="switchTab('inventory')" id="nav-inventory" class="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-slate-800 transition">
+                        <i class="fa-solid fa-boxes-stacked"></i> Inventory
+                    </button>
+                    <button onclick="switchTab('contacts')" id="nav-contacts" class="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-slate-800 transition">
+                        <i class="fa-solid fa-users"></i> Customers & Suppliers
+                    </button>
+                    <button onclick="switchTab('reports')" id="nav-reports" class="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-slate-800 transition">
+                        <i class="fa-solid fa-chart-line"></i> Reports & Analytics
+                    </button>
+                </nav>
+            </div>
+            <div class="p-4 border-t border-slate-800 text-sm">
+                <div class="flex items-center justify-between mb-2">
+                    <span id="current-user-role" class="font-bold text-emerald-400">Admin</span>
+                    <button onclick="toggleRole()" class="text-xs bg-slate-800 px-2 py-1 rounded hover:bg-slate-700">Switch Role</button>
+                </div>
+                <p class="text-xs text-slate-500">Offline-First POS v1.2</p>
+            </div>
+        </aside>
+
+        <!-- Content Area -->
+        <main class="flex-1 flex flex-col h-full overflow-hidden">
+            <!-- Top Header -->
+            <header class="bg-white shadow-sm h-16 flex items-center justify-between px-6 z-10">
+                <div class="flex items-center gap-3">
+                    <h1 id="page-title" class="text-xl font-bold text-slate-800">Sales & Billing</h1>
+                </div>
+                <div class="flex items-center gap-4">
+                    <span class="text-sm text-slate-600" id="current-time"></span>
+                    <button onclick="printLastReceipt()" class="bg-slate-100 p-2 rounded-lg hover:bg-slate-200 text-slate-700" title="Print Last Receipt"><i class="fa-solid fa-print"></i></button>
+                </div>
+            </header>
+
+            <!-- Dynamic Views Container -->
+            <div class="flex-1 overflow-y-auto p-6" id="main-content">
+                
+                <!-- 1. SALES TAB -->
+                <div id="tab-sales" class="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full">
+                    <!-- Left: Products Catalog & Search -->
+                    <div class="lg:col-span-7 flex flex-col h-full bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+                        <div class="flex gap-3 mb-4">
+                            <div class="relative flex-1">
+                                <i class="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400"></i>
+                                <input type="text" id="search-product" oninput="filterProducts()" placeholder="Search item or scan barcode..." class="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <select id="filter-category" onchange="filterProducts()" class="border rounded-lg px-3 py-2 bg-white text-sm">
+                                <option value="">All Categories</option>
+                            </select>
+                        </div>
+                        <div id="product-grid" class="grid grid-cols-2 sm:grid-cols-3 gap-3 overflow-y-auto flex-1 pr-1">
+                            <!-- Populated via JS -->
+                        </div>
+                    </div>
+
+                    <!-- Right: Cart & Checkout -->
+                    <div class="lg:col-span-5 flex flex-col bg-white rounded-xl shadow-sm border border-slate-200 p-4 h-full">
+                        <h2 class="font-bold text-lg mb-3 text-slate-800 border-b pb-2 flex justify-between items-center">
+                            <span>Current Order</span>
+                            <button onclick="clearCart()" class="text-xs text-red-500 hover:underline">Clear All</button>
+                        </h2>
+                        <div id="cart-items" class="flex-1 overflow-y-auto space-y-3 pr-1 divide-y">
+                            <!-- Cart Items here -->
+                        </div>
+                        <div class="border-t pt-4 mt-2 space-y-2 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-slate-600">Subtotal:</span>
+                                <span id="cart-subtotal" class="font-semibold">LKR 0.00</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-slate-600">Discount:</span>
+                                <input type="number" id="cart-discount" value="0" onchange="updateCartTotals()" class="w-24 border rounded px-2 py-1 text-right">
+                            </div>
+                            <div class="flex justify-between text-lg font-bold text-slate-900 border-t pt-2">
+                                <span>Total:</span>
+                                <span id="cart-total" class="text-emerald-600">LKR 0.00</span>
+                            </div>
+                            
+                            <div class="pt-2">
+                                <label class="text-xs text-slate-500">Select Customer:</label>
+                                <select id="cart-customer" class="w-full border rounded p-2 text-sm mt-1">
+                                    <option value="">Walk-in Customer</option>
+                                </select>
+                            </div>
+
+                            <button onclick="checkout()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg shadow transition mt-2">
+                                Complete Payment
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. INVENTORY TAB -->
+                <div id="tab-inventory" class="hidden space-y-6">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-xl font-bold text-slate-800">Inventory Management</h2>
+                        <button onclick="openProductModal()" class="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700"><i class="fa-solid fa-plus"></i> Add New Item</button>
+                    </div>
+                    <div id="low-stock-alert" class="hidden bg-amber-50 border-l-4 border-amber-400 p-4 rounded-r-lg text-amber-700 text-sm">
+                        <p class="font-bold">Low Stock Warning!</p>
+                        <p id="low-stock-text"></p>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="bg-slate-50 text-slate-600 text-xs uppercase border-b">
+                                    <th class="p-4">Barcode</th>
+                                    <th class="p-4">Item Name</th>
+                                    <th class="p-4">Category</th>
+                                    <th class="p-4">Cost Price</th>
+                                    <th class="p-4">Selling Price</th>
+                                    <th class="p-4">Stock Qty</th>
+                                    <th class="p-4">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="inventory-table-body" class="divide-y text-sm">
+                                <!-- Inventory items -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 3. CONTACTS TAB -->
+                <div id="tab-contacts" class="hidden space-y-6">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-xl font-bold text-slate-800">Customers & Suppliers</h2>
+                        <button onclick="openContactModal()" class="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700"><i class="fa-solid fa-user-plus"></i> Add Contact</button>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="bg-slate-50 text-slate-600 text-xs uppercase border-b">
+                                    <th class="p-4">Name</th>
+                                    <th class="p-4">Type</th>
+                                    <th class="p-4">Phone</th>
+                                    <th class="p-4">Credit Balance / Loyalty</th>
+                                    <th class="p-4">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="contacts-table-body" class="divide-y text-sm">
+                                <!-- Contacts list -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 4. REPORTS TAB -->
+                <div id="tab-reports" class="hidden space-y-6">
+                    <h2 class="text-xl font-bold text-slate-800">Reports & Analytics</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                            <p class="text-sm text-slate-500">Today's Sales</p>
+                            <h3 id="report-today-sales" class="text-2xl font-bold text-slate-800 mt-1">LKR 0.00</h3>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                            <p class="text-sm text-slate-500">Estimated Profit (Today)</p>
+                            <h3 id="report-today-profit" class="text-2xl font-bold text-emerald-600 mt-1">LKR 0.00</h3>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                            <p class="text-sm text-slate-500">Total Orders Processed</p>
+                            <h3 id="report-total-orders" class="text-2xl font-bold text-slate-800 mt-1">0</h3>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                        <h3 class="font-bold text-md mb-4 text-slate-800">Recent Transactions</h3>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse text-sm">
+                                <thead>
+                                    <tr class="bg-slate-50 text-slate-600 text-xs uppercase border-b">
+                                        <th class="p-3">Order ID</th>
+                                        <th class="p-3">Time</th>
+                                        <th class="p-3">Items Count</th>
+                                        <th class="p-3">Total Amount</th>
+                                        <th class="p-3">Profit</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="reports-transactions-body" class="divide-y">
+                                    <!-- Reports items -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- Hidden Receipt Print Area for Thermal Printers -->
+    <div id="receipt-print-area" class="hidden">
+        <div style="font-family: monospace; width: 280px; font-size: 12px; color: #000;">
+            <div style="text-align: center; margin-bottom: 10px;">
+                <h3 style="font-size: 16px; font-weight: bold; margin: 0;">SMART POS</h3>
+                <p style="margin: 2px 0;">123 Main Street, Colombo</p>
+                <p style="margin: 2px 0;">Tel: 011 2345678</p>
+            </div>
+            <div style="border-bottom: 1px dashed #000; margin-bottom: 5px; padding-bottom: 5px;">
+                <p style="margin: 2px 0;">Order ID: <span id="rec-order-id"></span></p>
+                <p style="margin: 2px 0;">Date: <span id="rec-date"></span></p>
+                <p style="margin: 2px 0;">Customer: <span id="rec-customer"></span></p>
+            </div>
+            <div style="border-bottom: 1px dashed #000; margin-bottom: 5px; padding-bottom: 5px;">
+                <table style="width: 100%; font-size: 12px;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid #000;">
+                            <th style="text-align: left;">Item</th>
+                            <th style="text-align: center;">Qty</th>
+                            <th style="text-align: right;">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody id="rec-items-body">
+                        <!-- Items go here -->
+                    </tbody>
+                </table>
+            </div>
+            <div style="margin-bottom: 10px;">
+                <div style="display: flex; justify-content: space-between;">
+                    <span>Subtotal:</span>
+                    <span id="rec-subtotal"></span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span>Discount:</span>
+                    <span id="rec-discount"></span>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 14px; margin-top: 4px;">
+                    <span>TOTAL:</span>
+                    <span id="rec-total"></span>
+                </div>
+            </div>
+            <div style="text-align: center; margin-top: 15px; font-size: 11px;">
+                <p style="margin: 2px 0;">Thank You, Come Again!</p>
+                <p style="margin: 2px 0;">Powered by SmartPOS</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Adding/Editing Product -->
+    <div id="product-modal" class="fixed inset-0 bg-black/50 hidden flex items-center justify-center z-50">
+        <div class="bg-white rounded-xl p-6 w-full max-w-md shadow-lg">
+            <h3 id="modal-product-title" class="text-lg font-bold mb-4">Add Product</h3>
+            <input type="hidden" id="prod-id">
+            <div class="space-y-3">
+                <div>
+                    <label class="text-xs text-slate-600">Barcode / SKU</label>
+                    <input type="text" id="prod-barcode" class="w-full border rounded p-2 text-sm" placeholder="Scan or type barcode">
+                </div>
+                <div>
+                    <label class="text-xs text-slate-600">Item Name</label>
+                    <input type="text" id="prod-name" class="w-full border rounded p-2 text-sm">
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="text-xs text-slate-600">Category</label>
+                        <input type="text" id="prod-category" class="w-full border rounded p-2 text-sm">
+                    </div>
+                    <div>
+                        <label class="text-xs text-slate-600">Stock Qty</label>
+                        <input type="number" id="prod-stock" class="w-full border rounded p-2 text-sm">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="text-xs text-slate-600">Cost Price (LKR)</label>
+                        <input type="number" id="prod-cost" class="w-full border rounded p-2 text-sm">
+                    </div>
+                    <div>
+                        <label class="text-xs text-slate-600">Selling Price (LKR)</label>
+                        <input type="number" id="prod-price" class="w-full border rounded p-2 text-sm">
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button onclick="closeProductModal()" class="px-4 py-2 bg-gray-200 text-slate-700 rounded text-sm">Cancel</button>
+                <button onclick="saveProduct()" class="px-4 py-2 bg-emerald-600 text-white rounded text-sm">Save Item</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Barcode Printing -->
+    <div id="barcode-print-modal" class="fixed inset-0 bg-black/50 hidden flex items-center justify-center z-50">
+        <div class="bg-white rounded-xl p-6 w-full max-w-sm shadow-lg text-center">
+            <h3 class="text-lg font-bold mb-3 text-slate-800">Print Product Barcode</h3>
+            <div id="barcode-section" class="p-4 bg-slate-50 border rounded-lg inline-block my-2">
+                <h4 id="print-prod-name" class="font-bold text-slate-800 text-sm"></h4>
+                <p class="text-xs text-slate-600 mb-2">Price: LKR <span id="print-prod-price"></span></p>
+                <!-- SVG element for barcode -->
+                <svg id="productBarcode"></svg>
+            </div>
+            <div class="flex justify-center gap-2 mt-4 no-print">
+                <button onclick="closeBarcodeModal()" class="px-4 py-2 bg-gray-200 text-slate-700 rounded text-sm">Close</button>
+                <button onclick="window.print()" class="px-4 py-2 bg-emerald-600 text-white rounded text-sm flex items-center gap-2">
+                    <i class="fa-solid fa-print"></i> Print Label
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Adding Contact -->
+    <div id="contact-modal" class="fixed inset-0 bg-black/50 hidden flex items-center justify-center z-50">
+        <div class="bg-white rounded-xl p-6 w-full max-w-md shadow-lg">
+            <h3 class="text-lg font-bold mb-4">Add Customer / Supplier</h3>
+            <div class="space-y-3">
+                <div>
+                    <label class="text-xs text-slate-600">Name</label>
+                    <input type="text" id="con-name" class="w-full border rounded p-2 text-sm">
+                </div>
+                <div>
+                    <label class="text-xs text-slate-600">Type</label>
+                    <select id="con-type" class="w-full border rounded p-2 text-sm">
+                        <option value="Customer">Customer</option>
+                        <option value="Supplier">Supplier</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-xs text-slate-600">Phone Number</label>
+                    <input type="text" id="con-phone" class="w-full border rounded p-2 text-sm">
+                </div>
+                <div>
+                    <label class="text-xs text-slate-600">Initial Credit Balance / Due (LKR)</label>
+                    <input type="number" id="con-balance" value="0" class="w-full border rounded p-2 text-sm">
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button onclick="closeContactModal()" class="px-4 py-2 bg-gray-200 text-slate-700 rounded text-sm">Cancel</button>
+                <button onclick="saveContact()" class="px-4 py-2 bg-emerald-600 text-white rounded text-sm">Save Contact</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript Application Logic -->
+    <script>
+        let db = {
+            products: JSON.parse(localStorage.getItem('pos_products')) || [
+                { id: 1, barcode: '893201', name: 'Tea Packet 100g', category: 'Beverages', cost: 120, price: 160, stock: 45 },
+                { id: 2, barcode: '893202', name: 'Milk Powder 400g', category: 'Grocery', cost: 850, price: 980, stock: 8 },
+                { id: 3, barcode: '893203', name: 'Sunlight Soap', category: 'Household', cost: 180, price: 210, stock: 30 },
+                { id: 4, barcode: '893204', name: 'Coca Cola 500ml', category: 'Beverages', cost: 140, price: 180, stock: 3 }
+            ],
+            contacts: JSON.parse(localStorage.getItem('pos_contacts')) || [
+                { id: 1, name: 'Kamal Perera', type: 'Customer', phone: '0771234567', balance: 0 },
+                { id: 2, name: 'Distributors Ltd', type: 'Supplier', phone: '0112345678', balance: 15000 }
+            ],
+            orders: JSON.parse(localStorage.getItem('pos_orders')) || []
+        };
+
+        let cart = [];
+        let currentRole = 'Admin';
+        let lastCompletedOrder = null;
+
+        function saveData() {
+            localStorage.setItem('pos_products', JSON.stringify(db.products));
+            localStorage.setItem('pos_contacts', JSON.stringify(db.contacts));
+            localStorage.setItem('pos_orders', JSON.stringify(db.orders));
+        }
+
+        setInterval(() => {
+            document.getElementById('current-time').innerText = new Date().toLocaleString();
+        }, 1000);
+
+        function switchTab(tabId) {
+            ['sales', 'inventory', 'contacts', 'reports'].forEach(t => {
+                document.getElementById(`tab-${t}`).classList.add('hidden');
+                document.getElementById(`nav-${t}`)?.classList.remove('bg-emerald-600', 'text-white');
+                document.getElementById(`nav-${t}`)?.classList.add('hover:bg-slate-800');
+            });
+            document.getElementById(`tab-${tabId}`).classList.remove('hidden');
+            if(document.getElementById(`nav-${tabId}`)) {
+                document.getElementById(`nav-${tabId}`).classList.add('bg-emerald-600', 'text-white');
+                document.getElementById(`nav-${tabId}`).classList.remove('hover:bg-slate-800');
+            }
+            
+            if(tabId === 'sales') renderProducts();
+            if(tabId === 'inventory') renderInventory();
+            if(tabId === 'contacts') renderContacts();
+            if(tabId === 'reports') renderReports();
+        }
+
+        function toggleRole() {
+            const roles = ['Admin', 'Manager', 'Cashier'];
+            let nextIndex = (roles.indexOf(currentRole) + 1) % roles.length;
+            currentRole = roles[nextIndex];
+            document.getElementById('current-user-role').innerText = currentRole;
+            alert(`Switched role to: ${currentRole}`);
+        }
+
+        // --- SALES TAB LOGIC ---
+        function renderProducts() {
+            const grid = document.getElementById('product-grid');
+            const search = document.getElementById('search-product').value.toLowerCase();
+            const category = document.getElementById('filter-category').value;
+            
+            const cats = [...new Set(db.products.map(p => p.category))];
+            const catSelect = document.getElementById('filter-category');
+            catSelect.innerHTML = '<option value="">All Categories</option>' + cats.map(c => `<option value="${c}">${c}</option>`).join('');
+            catSelect.value = category;
+
+            grid.innerHTML = '';
+            const filtered = db.products.filter(p => {
+                let matchText = (p.name.toLowerCase().includes(search) || (p.barcode && p.barcode.toLowerCase().includes(search)));
+                return matchText && (category === '' || p.category === category);
+            });
+
+            filtered.forEach(p => {
+                grid.innerHTML += `
+                    <div onclick="addToCart(${p.id})" class="bg-slate-50 border border-slate-200 hover:border-emerald-500 rounded-xl p-3 flex flex-col justify-between cursor-pointer transition select-none">
+                        <div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-[10px] bg-slate-200 px-2 py-0.5 rounded text-slate-600">${p.category}</span>
+                                <span class="text-[10px] text-slate-400 font-mono">${p.barcode || 'No Barcode'}</span>
+                            </div>
+                            <h4 class="font-semibold text-sm text-slate-800 mt-2">${p.name}</h4>
+                        </div>
+                        <div class="mt-3 flex justify-between items-end">
+                            <span class="text-emerald-600 font-bold text-sm">LKR ${p.price}</span>
+                            <span class="text-xs text-slate-500">Stock: ${p.stock}</span>
+                        </div>
+                    </div>
+                `;
+            });
+
+            const custSelect = document.getElementById('cart-customer');
+            custSelect.innerHTML = '<option value="">Walk-in Customer</option>' + db.contacts.filter(c => c.type === 'Customer').map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+        }
+
+        function filterProducts() {
+            const search = document.getElementById('search-product').value.trim().toLowerCase();
+            if(search !== '') {
+                const exactBarcodeMatch = db.products.find(p => p.barcode && p.barcode.toLowerCase() === search);
+                if(exactBarcodeMatch) {
+                    addToCart(exactBarcodeMatch.id);
+                    document.getElementById('search-product').value = '';
+                    renderProducts();
+                    return;
+                }
+            }
+            renderProducts();
+        }
+
+        function addToCart(productId) {
+            const product = db.products.find(p => p.id === productId);
+            if(!product || product.stock <= 0) {
+                alert('Item out of stock!');
+                return;
+            }
+            const existing = cart.find(item => item.id === productId);
+            if(existing) {
+                if(existing.qty < product.stock) {
+                    existing.qty++;
+                } else {
+                    alert('Reached maximum stock limit!');
+                }
+            } else {
+                cart.push({ id: product.id, name: product.name, price: product.price, cost: product.cost, qty: 1 });
+            }
+            renderCart();
+        }
+
+        function renderCart() {
+            const container = document.getElementById('cart-items');
+            container.innerHTML = '';
+            if(cart.length === 0) {
+                container.innerHTML = '<p class="text-center text-slate-400 py-10 text-sm">Cart is empty</p>';
+                updateCartTotals();
+                return;
+            }
+
+            cart.forEach((item, index) => {
+                container.innerHTML += `
+                    <div class="py-2 flex justify-between items-center text-sm">
+                        <div>
+                            <p class="font-medium text-slate-800">${item.name}</p>
+                            <p class="text-xs text-slate-500">LKR ${item.price} each</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="changeQty(${index}, -1)" class="w-6 h-6 bg-slate-100 rounded text-slate-600 hover:bg-slate-200">-</button>
+                            <span class="w-6 text-center font-semibold">${item.qty}</span>
+                            <button onclick="changeQty(${index}, 1)" class="w-6 h-6 bg-slate-100 rounded text-slate-600 hover:bg-slate-200">+</button>
+                            <span class="font-bold w-20 text-right">LKR ${item.price * item.qty}</span>
+                        </div>
+                    </div>
+                `;
+            });
+            updateCartTotals();
+        }
+
+        function changeQty(index, change) {
+            cart[index].qty += change;
+            if(cart[index].qty <= 0) {
+                cart.splice(index, 1);
+            }
+            renderCart();
+        }
+
+        function clearCart() {
+            cart = [];
+            renderCart();
+        }
+
+        function updateCartTotals() {
+            let subtotal = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
+            let discount = parseFloat(document.getElementById('cart-discount').value) || 0;
+            let total = Math.max(0, subtotal - discount);
+
+            document.getElementById('cart-subtotal').innerText = `LKR ${subtotal.toFixed(2)}`;
+            document.getElementById('cart-total').innerText = `LKR ${total.toFixed(2)}`;
+        }
+
+        function checkout() {
+            if(cart.length === 0) {
+                alert('Cart is empty!');
+                return;
+            }
+            let subtotal = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
+            let discount = parseFloat(document.getElementById('cart-discount').value) || 0;
+            let total = Math.max(0, subtotal - discount);
+            let totalCost = cart.reduce((sum, item) => sum + (item.cost * item.qty), 0);
+            let profit = total - totalCost;
+
+            cart.forEach(cartItem => {
+                let prod = db.products.find(p => p.id === cartItem.id);
+                if(prod) prod.stock -= cartItem.qty;
+            });
+
+            const newOrder = {
+                id: 'ORD-' + Math.floor(1000 + Math.random() * 9000),
+                time: new Date().toLocaleTimeString(),
+                date: new Date().toLocaleDateString(),
+                itemsCount: cart.reduce((sum, i) => sum + i.qty, 0),
+                items: [...cart],
+                subtotal: subtotal,
+                discount: discount,
+                total: total,
+                profit: profit,
+                customer: document.getElementById('cart-customer').value || 'Walk-in'
+            };
+
+            db.orders.unshift(newOrder);
+            lastCompletedOrder = newOrder;
+            saveData();
+
+            prepareAndPrintReceipt(newOrder);
+
+            cart = [];
+            document.getElementById('cart-discount').value = 0;
+            renderCart();
+            renderProducts();
+        }
+
+        function prepareAndPrintReceipt(order) {
+            document.getElementById('rec-order-id').innerText = order.id;
+            document.getElementById('rec-date').innerText = `${order.date} ${order.time}`;
+            document.getElementById('rec-customer').innerText = order.customer;
+            
+            let itemsBody = document.getElementById('rec-items-body');
+            itemsBody.innerHTML = '';
+            order.items.forEach(i => {
+                itemsBody.innerHTML += `
+                    <tr>
+                        <td style="text-align: left; padding: 2px 0;">${i.name}</td>
+                        <td style="text-align: center; padding: 2px 0;">${i.qty}</td>
+                        <td style="text-align: right; padding: 2px 0;">${(i.price * i.qty).toFixed(2)}</td>
+                    </tr>
+                `;
+            });
+
+            document.getElementById('rec-subtotal').innerText = `LKR ${order.subtotal.toFixed(2)}`;
+            document.getElementById('rec-discount').innerText = `LKR ${order.discount.toFixed(2)}`;
+            document.getElementById('rec-total').innerText = `LKR ${order.total.toFixed(2)}`;
+
+            document.getElementById('receipt-print-area').classList.remove('hidden');
+            setTimeout(() => {
+                window.print();
+                document.getElementById('receipt-print-area').classList.add('hidden');
+            }, 300);
+        }
+
+        function printLastReceipt() {
+            if(!lastCompletedOrder && db.orders.length > 0) {
+                lastCompletedOrder = db.orders[0];
+            }
+            if(!lastCompletedOrder) {
+                alert('No recent orders available to print!');
+                return;
+            }
+            prepareAndPrintReceipt(lastCompletedOrder);
+        }
+
+        // --- INVENTORY & BARCODE PRINTING LOGIC ---
+        function renderInventory() {
+            const tbody = document.getElementById('inventory-table-body');
+            tbody.innerHTML = '';
+            
+            let lowStockItems = [];
+
+            db.products.forEach(p => {
+                if(p.stock <= 5) lowStockItems.push(p.name);
+                tbody.innerHTML += `
+                    <tr class="hover:bg-slate-50">
+                        <td class="p-4 font-mono text-xs text-slate-500">${p.barcode || '-'}</td>
+                        <td class="p-4 font-medium text-slate-800">${p.name}</td>
+                        <td class="p-4 text-slate-600">${p.category}</td>
+                        <td class="p-4 text-slate-600">LKR ${p.cost}</td>
+                        <td class="p-4 text-slate-600">LKR ${p.price}</td>
+                        <td class="p-4 font-semibold ${p.stock <= 5 ? 'text-red-500' : 'text-slate-800'}">${p.stock}</td>
+                        <td class="p-4 space-x-2">
+                            <button onclick="editProduct(${p.id})" class="text-emerald-600 hover:underline">Edit</button>
+                            <button onclick="printItemBarcode(${p.id})" class="text-blue-600 hover:underline"><i class="fa-solid fa-barcode"></i> Print Barcode</button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            const alertBox = document.getElementById('low-stock-alert');
+            if(lowStockItems.length > 0) {
+                alertBox.classList.remove('hidden');
+                document.getElementById('low-stock-text').innerText = `Following items are running low: ${lowStockItems.join(', ')}`;
+            } else {
+                alertBox.classList.add('hidden');
+            }
+        }
+
+        function printItemBarcode(id) {
+            let p = db.products.find(item => item.id === id);
+            if(!p || !p.barcode) {
+                alert('This product does not have a valid barcode assigned!');
+                return;
+            }
+
+            document.getElementById('print-prod-name').innerText = p.name;
+            document.getElementById('print-prod-price').innerText = p.price;
+
+            try {
+                JsBarcode("#productBarcode", p.barcode, {
+                    format: "CODE128",
+                    lineColor: "#000",
+                    width: 2,
+                    height: 50,
+                    displayValue: true
+                });
+                document.getElementById('barcode-print-modal').classList.remove('hidden');
+            } catch (e) {
+                alert('Error generating barcode: ' + e.message);
+            }
+        }
+
+        function closeBarcodeModal() {
+            document.getElementById('barcode-print-modal').classList.add('hidden');
+        }
+
+        function openProductModal(id = null) {
+            document.getElementById('product-modal').classList.remove('hidden');
+            if(id) {
+                let p = db.products.find(item => item.id === id);
+                document.getElementById('modal-product-title').innerText = 'Edit Product';
+                document.getElementById('prod-id').value = p.id;
+                document.getElementById('prod-barcode').value = p.barcode || '';
+                document.getElementById('prod-name').value = p.name;
+                document.getElementById('prod-category').value = p.category;
+                document.getElementById('prod-stock').value = p.stock;
+                document.getElementById('prod-cost').value = p.cost;
+                document.getElementById('prod-price').value = p.price;
+            } else {
+                document.getElementById('modal-product-title').innerText = 'Add Product';
+                document.getElementById('prod-id').value = '';
+                document.getElementById('prod-barcode').value = '';
+                document.getElementById('prod-name').value = '';
+                document.getElementById('prod-category').value = '';
+                document.getElementById('prod-stock').value = '';
+                document.getElementById('prod-cost').value = '';
+                document.getElementById('prod-price').value = '';
+            }
+        }
+
+        function closeProductModal() {
+            document.getElementById('product-modal').classList.add('hidden');
+        }
+
+        function editProduct(id) {
+            openProductModal(id);
+        }
+
+        function saveProduct() {
+            let id = document.getElementById('prod-id').value;
+            let barcode = document.getElementById('prod-barcode').value.trim();
+            let name = document.getElementById('prod-name').value.trim();
+            let category = document.getElementById('prod-category').value.trim();
+            let stock = parseInt(document.getElementById('prod-stock').value) || 0;
+            let cost = parseFloat(document.getElementById('prod-cost').value) || 0;
+            let price = parseFloat(document.getElementById('prod-price').value) || 0;
+
+            if(!name) { alert('Name required'); return; }
+
+            if(id) {
+                let p = db.products.find(item => item.id == id);
+                p.barcode = barcode; p.name = name; p.category = category; p.stock = stock; p.cost = cost; p.price = price;
+            } else {
+                let newId = db.products.length ? Math.max(...db.products.map(p => p.id)) + 1 : 1;
+                db.products.push({ id: newId, barcode, name, category, stock, cost, price });
+            }
+            saveData();
+            closeProductModal();
+            renderInventory();
+        }
+
+        // --- CONTACTS TAB LOGIC ---
+        function renderContacts() {
+            const tbody = document.getElementById('contacts-table-body');
+            tbody.innerHTML = '';
+            db.contacts.forEach(c => {
+                tbody.innerHTML += `
+                    <tr class="hover:bg-slate-50">
+                        <td class="p-4 font-medium text-slate-800">${c.name}</td>
+                        <td class="p-4"><span class="px-2 py-0.5 rounded text-xs ${c.type === 'Customer' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}">${c.type}</span></td>
+                        <td class="p-4 text-slate-600">${c.phone}</td>
+                        <td class="p-4 font-semibold">LKR ${c.balance}</td>
+                        <td class="p-4">-</td>
+                    </tr>
+                `;
+            });
+        }
+
+        function openContactModal() {
+            document.getElementById('contact-modal').classList.remove('hidden');
+        }
+
+        function closeContactModal() {
+            document.getElementById('contact-modal').classList.add('hidden');
+        }
+
+        function saveContact() {
+            let name = document.getElementById('con-name').value;
+            let type = document.getElementById('con-type').value;
+            let phone = document.getElementById('con-phone').value;
+            let balance = parseFloat(document.getElementById('con-balance').value) || 0;
+
+            if(!name) { alert('Name required'); return; }
+            let newId = db.contacts.length ? Math.max(...db.contacts.map(c => c.id)) + 1 : 1;
+            db.contacts.push({ id: newId, name, type, phone, balance });
+            saveData();
+            closeContactModal();
+            renderContacts();
+        }
+
+        // --- REPORTS TAB LOGIC ---
+        function renderReports() {
+            let todayStr = new Date().toLocaleDateString();
+            let todayOrders = db.orders.filter(o => o.date === todayStr);
+            let todaySales = todayOrders.reduce((sum, o) => sum + o.total, 0);
+            let todayProfit = todayOrders.reduce((sum, o) => sum + o.profit, 0);
+
+            document.getElementById('report-today-sales').innerText = `LKR ${todaySales.toFixed(2)}`;
+            document.getElementById('report-today-profit').innerText = `LKR ${todayProfit.toFixed(2)}`;
+            document.getElementById('report-total-orders').innerText = db.orders.length;
+
+            let tbody = document.getElementById('reports-transactions-body');
+            if(tbody) {
+                tbody.innerHTML = '';
+                db.orders.forEach(o => {
+                    tbody.innerHTML += `
+                        <tr class="hover:bg-slate-50">
+                            <td class="p-3 font-medium text-slate-800">${o.id}</td>
+                            <td class="p-3 text-slate-600">${o.date} ${o.time}</td>
+                            <td class="p-3 text-slate-600">${o.itemsCount} items</td>
+                            <td class="p-3 font-semibold">LKR ${o.total.toFixed(2)}</td>
+                            <td class="p-3 text-emerald-600 font-semibold">LKR ${o.profit.toFixed(2)}</td>
+                        </tr>
+                    `;
+                });
+            }
+        }
+
+        renderProducts();
+    </script>
+</body>
+</html>
